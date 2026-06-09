@@ -1,8 +1,11 @@
-from collections import deque
+from collections import deque, defaultdict
+from threading import Lock
+import json
+import os
+import re
 
 from flask import Flask, request
 import requests
-import os
 
 from dotenv import load_dotenv
 
@@ -47,37 +50,93 @@ IGNORE_FROM_ME = os.getenv("IGNORE_FROM_ME", "false").lower() == "true"
 _ids_processados = deque(maxlen=1000)
 _ids_set = set()
 
+dedupe_lock = Lock()
+cliente_locks = defaultdict(Lock)
 
 def ja_processado(message_id):
 
     if not message_id:
         return False
 
-    if message_id in _ids_set:
-        return True
+    with dedupe_lock:
 
-    _ids_processados.append(message_id)
-    _ids_set.add(message_id)
+        if message_id in _ids_set:
+            return True
 
-    # mantém o set alinhado com a janela da deque
-    while len(_ids_set) > len(_ids_processados):
-        _ids_set.intersection_update(_ids_processados)
+        _ids_processados.append(message_id)
+        _ids_set.add(message_id)
 
-    return False
+        while len(_ids_set) > len(_ids_processados):
+            _ids_set.intersection_update(_ids_processados)
 
+        return False
 
-def extrair_numero(data, chave):
+def limpar_numero(valor):
 
-    sender = data.get("sender", "")
-
-    if not sender:
-        sender = chave.get("remoteJid", "")
+    if not valor:
+        return ""
 
     return (
-        sender
+        str(valor)
         .split("@")[0]
         .split(":")[0]
+        .strip()
     )
+
+
+def extrair_numero(data, payload, chave):
+    """A identidade do cliente é o key.remoteJid (o OUTRO lado do chat).
+    NUNCA usar 'sender': no Evolution ele é o dono da instância (o próprio
+    bot), o que faria TODOS os clientes caírem no mesmo número."""
+
+    remote = chave.get("remoteJid", "") or ""
+
+    print("\n===== DEBUG NUMERO =====")
+    print("remoteJid (cliente) =", remote)
+    print("sender (ignorado)   =", data.get("sender"))
+    print("========================\n")
+
+    if remote.endswith("@g.us"):   # grupos não são atendidos
+        return ""
+
+    return limpar_numero(remote)
+
+
+# Telefone real costuma aparecer como <dígitos>@s.whatsapp.net no payload.
+TELEFONE_RE = re.compile(r"(\d{12,15})@s\.whatsapp\.net")
+
+
+def telefone_resposta(data, payload, chave):
+    """O Evolution NÃO entrega para um @lid. Quando o remoteJid é @lid
+    (não-contato), tenta achar o telefone REAL (…@s.whatsapp.net) em outros
+    campos para conseguir enviar a resposta. Retorna '' se não houver."""
+
+    remote = chave.get("remoteJid", "") or ""
+
+    # 1. remoteJid já é um telefone real
+    if remote.endswith("@s.whatsapp.net"):
+        return limpar_numero(remote)
+
+    # 2. campos onde o telefone real costuma vir quando o remoteJid é @lid
+    for valor in (
+        payload.get("senderPn"),
+        payload.get("participantPn"),
+        chave.get("senderPn"),
+        chave.get("participantPn"),
+        chave.get("participant"),
+    ):
+        if valor and "@lid" not in str(valor):
+            num = limpar_numero(valor)
+            if num:
+                return num
+
+    # 3. varre todo o payload por um telefone@s.whatsapp.net que NÃO seja o dono
+    dono = limpar_numero(data.get("sender"))
+    for achado in TELEFONE_RE.findall(json.dumps(data)):
+        if achado != dono:
+            return achado
+
+    return ""
 
 
 def extrair_mensagem(mensagem_obj):
@@ -100,6 +159,27 @@ def webhook():
 
     data = request.json
 
+    payload_texto = json.dumps(data, indent=2, ensure_ascii=False)
+
+    with open("payload_debug.txt", "w", encoding="utf-8") as f:
+        f.write(payload_texto)
+
+    print(payload_texto)
+
+    with open(
+        "ultimo_payload.json",
+        "w",
+        encoding="utf-8"
+    ) as f:
+        json.dump(
+            data,
+            f,
+            indent=2,
+            ensure_ascii=False
+        )
+
+    print(json.dumps(data, indent=2, ensure_ascii=False))
+
     try:
 
         if data.get("event") != "messages.upsert":
@@ -113,7 +193,18 @@ def webhook():
         from_me = chave.get("fromMe", False)
         push_name = payload.get("pushName", "") or ""
 
-        numero = extrair_numero(data, chave)
+        print("ROOT SENDER =", data.get("sender"))
+        print("PAYLOAD SENDER =", payload.get("sender"))
+        print("REMOTE JID =", chave.get("remoteJid"))
+
+        numero = extrair_numero(data, payload, chave)
+        remote_jid = chave.get("remoteJid", "")
+
+        if "@g.us" in remote_jid:
+            return {"status": "ignored_group"}
+
+        if not numero:
+            return {"status": "no_number"}
         mensagem = extrair_mensagem(mensagem_obj)
 
         # Ignora mensagens próprias (loop) se configurado
@@ -134,22 +225,39 @@ def webhook():
         print(f"FROM_ME: {from_me}  ID: {message_id}")
         print("==============================")
 
-        resposta = processar_mensagem(numero, mensagem, push_name)
+        with cliente_locks[numero]:
+
+            resposta = processar_mensagem(
+                numero,
+                mensagem,
+                push_name
+            )
 
         print("\nRESPOSTA:")
         print(resposta)
+
+        # Para enviar, o Evolution precisa do telefone REAL (não entrega a @lid)
+        destino = telefone_resposta(data, payload, chave)
+        print("TELEFONE RESPOSTA =", destino or "(NAO ENCONTRADO - @lid de nao-contato)")
+
+        if not destino:
+            print(
+                "AVISO: o pedido foi processado/gravado, mas nao ha telefone "
+                "real para responder (numero mascarado como @lid)."
+            )
 
         envio = requests.post(
             f"{EVOLUTION_URL}/message/sendText/{INSTANCE_NAME}",
             headers={"apikey": API_KEY},
             json={
-                "number": numero,
+                "number": destino or remote_jid or numero,
                 "text": resposta
             }
         )
 
         print("\nSTATUS ENVIO:")
         print(envio.status_code)
+        print(envio.text)
 
         return {"status": "ok"}
 
@@ -171,5 +279,6 @@ print("===================================\n")
 
 app.run(
     host="0.0.0.0",
-    port=5000
+    port=5000,
+    threaded=True
 )

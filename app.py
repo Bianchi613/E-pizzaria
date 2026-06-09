@@ -11,6 +11,8 @@ from dotenv import load_dotenv
 load_dotenv()
 
 PIZZARIA_PATH = "prompts/pizzaria.json"
+SYSTEM_PROMPT_PATH = "prompts/system_prompt.txt"
+EXTRACTION_PROMPT_PATH = "prompts/extraction_prompt.txt"
 MEMORY_DIR = "prompts/memorias"
 
 # Quantas mensagens (user+assistant) manter no histórico enviado ao LLM
@@ -402,14 +404,22 @@ def calcular_total(pedido, precos):
 
 def formatar_resumo_valores(valores):
     """Bloco de valores que o CÓDIGO anexa ao resumo (a IA não escreve preços),
-    garantindo que o total exibido seja sempre igual ao gravado no banco."""
+    garantindo que o total exibido seja sempre igual ao gravado no banco.
+    Mostra o preço de CADA pizza e o total."""
 
-    linhas = [f"🍕 Pizzas: R$ {valores['valor_pizzas']}"]
+    linhas = []
+
+    for item in valores.get("itens", []):
+        extra = f" (+ borda R$ {item['valor_borda']})" if item["valor_borda"] else ""
+        linhas.append(
+            f"🍕 {item['quantidade']}x {item['tamanho']}"
+            f"{extra} — R$ {item['subtotal']}"
+        )
 
     if valores["valor_bebidas"]:
-        linhas.append(f"🥤 Bebidas: R$ {valores['valor_bebidas']}")
+        linhas.append(f"🥤 Bebidas — R$ {valores['valor_bebidas']}")
 
-    linhas.append(f"🚚 Taxa de entrega: R$ {valores['taxa_entrega']}")
+    linhas.append(f"🚚 Taxa de entrega — R$ {valores['taxa_entrega']}")
     linhas.append(f"💰 *TOTAL: R$ {valores['total']}*")
 
     return "—————————————\n" + "\n".join(linhas)
@@ -511,123 +521,128 @@ def chat(messages):
     return generate_chat_response(messages)
 
 
-def montar_system_prompt(pizzaria, memory):
+def load_system_template():
 
-    def linhas(itens):
-        return "\n".join(f"- {item}" for item in itens)
+    with open(SYSTEM_PROMPT_PATH, "r", encoding="utf-8") as f:
+        return f.read()
+
+
+# Placeholder no template: [[CHAVE]] ou [[CHAVE:estilo]]
+PLACEHOLDER_RE = re.compile(r"\[\[([A-Z_]+)(?::(\w+))?\]\]")
+
+
+def _render_inline(valor):
+    if isinstance(valor, dict):
+        return ", ".join(f"{k}: {v}" for k, v in valor.items())
+    if isinstance(valor, list):
+        return ", ".join(str(item) for item in valor)
+    return str(valor)
+
+
+def _render(valor, estilo="bloco"):
+    """Formata um valor genérico para o prompt, sem conhecer o domínio.
+    - listas: bullets (ou inline se estilo='inline')
+    - dicts: uma linha 'chave: valor' por item
+    - escalares: o próprio texto
+    """
+
+    if isinstance(valor, dict):
+        return "\n".join(f"- {k}: {_render_inline(v)}" for k, v in valor.items())
+
+    if isinstance(valor, list):
+        if estilo == "inline":
+            return _render_inline(valor)
+        return "\n".join(f"- {_render_inline(item)}" for item in valor)
+
+    return str(valor)
+
+
+def montar_system_prompt(config, memory):
+    """Motor de template genérico (independente do domínio): para cada
+    placeholder [[CHAVE]] no template, busca a chave em `config` (arquivo de
+    negócio) ou nos dados de runtime, e formata. Trocar de negócio = trocar
+    os arquivos em prompts/, sem mexer no código."""
 
     cadastrado = memory.get("cliente_cadastrado", False)
-    ultimos = memory.get("ultimos_pedidos", [])
-    precos = pizzaria.get("precos", {})
 
-    def tabela_precos():
-        tam = precos.get("tamanhos", {})
-        beb = precos.get("bebidas", {})
-        linhas_tam = [f"  Pizza {t}: R$ {v}" for t, v in tam.items()]
-        linhas_beb = [f"  {b}: R$ {v}" for b, v in beb.items()]
-        return (
-            "\n".join(linhas_tam)
-            + f"\n  Borda recheada: + R$ {precos.get('borda', 0)} por pizza"
-            + "\n" + "\n".join(linhas_beb)
-            + f"\n  Taxa de entrega: R$ {precos.get('taxa_entrega', 0)}"
-        )
+    # Dados que vêm do estado da conversa (não do arquivo de negócio)
+    runtime = {
+        "RECONHECIMENTO": config.get(
+            "reconhecimento_cadastrado" if cadastrado else "reconhecimento_novo",
+            ""
+        ),
+        "CLIENTE": json.dumps(memory.get("cliente", {}), ensure_ascii=False),
+        "ULTIMOS_PEDIDOS": json.dumps(
+            memory.get("ultimos_pedidos", []), ensure_ascii=False
+        ),
+        "PEDIDO_ATUAL": json.dumps(
+            memory.get("pedido_atual", {}), ensure_ascii=False
+        ),
+    }
 
-    if cadastrado:
-        bloco_reconhecimento = (
-            "Este cliente JÁ É CADASTRADO. Saúde-o pelo nome e, se houver "
-            "pedidos anteriores, ofereça repetir o último pedido."
-        )
-    else:
-        bloco_reconhecimento = (
-            "Cliente NÃO cadastrado. Faça o onboarding: pergunte o nome e o "
-            "endereço de entrega de forma natural ao longo do atendimento."
-        )
+    def resolver(match):
+        chave, estilo = match.group(1), match.group(2) or "bloco"
 
-    return f"""{pizzaria.get('system_prompt', '')}
+        if chave in runtime:
+            return runtime[chave]
 
-REGRAS:
-{linhas(pizzaria.get('regras', []))}
+        return _render(config.get(chave.lower(), ""), estilo)
 
-FLUXO DE ATENDIMENTO:
-{linhas(pizzaria.get('fluxo', []))}
+    return PLACEHOLDER_RE.sub(resolver, load_system_template())
 
-CARDÁPIO (nunca ofereça itens fora desta lista):
-Tamanhos: {', '.join(pizzaria.get('tamanhos', []))}
-Sabores: {', '.join(pizzaria.get('sabores', []))}
-Bebidas: {', '.join(pizzaria.get('bebidas', []))}
 
-TABELA DE PREÇOS (em reais):
-{tabela_precos()}
-Observação: meio a meio NÃO altera o preço (vale o valor do tamanho escolhido).
-Se o cliente pedir para ver os preços ou o cardápio, apresente esta lista de itens com os valores.
+# =========================================
+# EXTRAÇÃO DE ESTADO (chamada dedicada)
+# Em vez de depender do modelo de chat anexar o bloco <<<DADOS>>>, uma 2ª
+# chamada focada lê a conversa e devolve SEMPRE o JSON do estado do pedido.
+# =========================================
 
-FORMAS DE PAGAMENTO (sempre liste estas opções ao perguntar como o cliente vai pagar):
-{', '.join(pizzaria.get('formas_pagamento', []))}
+JSON_OBJ_RE = re.compile(r"\{.*\}", re.DOTALL)
 
-DADOS OBRIGATÓRIOS PARA FECHAR O PEDIDO:
-{', '.join(pizzaria.get('dados_obrigatorios', []))}
 
-RECONHECIMENTO:
-{bloco_reconhecimento}
+def montar_extraction_prompt(config):
 
-CLIENTE (dados vindos do cadastro pelo número de telefone):
-{json.dumps(memory.get('cliente', {}), ensure_ascii=False)}
+    with open(EXTRACTION_PROMPT_PATH, "r", encoding="utf-8") as f:
+        template = f.read()
 
-ÚLTIMOS PEDIDOS DESTE CLIENTE:
-{json.dumps(ultimos, ensure_ascii=False)}
+    def resolver(match):
+        chave, estilo = match.group(1), match.group(2) or "bloco"
+        return _render(config.get(chave.lower(), ""), estilo)
 
-PROCEDIMENTO DE CADASTRO (cliente novo):
-{linhas(pizzaria.get('procedimento_cadastro', []))}
+    return PLACEHOLDER_RE.sub(resolver, template)
 
-PROCEDIMENTO DE OBSERVAÇÕES:
-{linhas(pizzaria.get('procedimento_observacoes', []))}
 
-PROCEDIMENTO DE ENDEREÇO (confirme SEMPRE antes do resumo):
-{linhas(pizzaria.get('procedimento_endereco', []))}
+def _parse_json_estado(texto):
 
-PROCEDIMENTO DE PAGAMENTO:
-{linhas(pizzaria.get('procedimento_pagamento', []))}
+    match = JSON_OBJ_RE.search(texto or "")
 
-PROCEDIMENTO DE CONFIRMAÇÃO (obrigatório antes de finalizar):
-{linhas(pizzaria.get('procedimento_confirmacao', []))}
+    if not match:
+        return None
 
-MODELO DE RESUMO (use este formato ao apresentar o pedido completo):
-{pizzaria.get('modelo_resumo', '')}
+    try:
+        return json.loads(match.group(0))
+    except json.JSONDecodeError:
+        return None
 
-PEDIDO ATUAL (já coletado até agora — NÃO pergunte novamente o que já está preenchido):
-{json.dumps(memory.get('pedido_atual', {}), ensure_ascii=False)}
 
-REGRA DE PREÇOS (MUITO IMPORTANTE):
-- NUNCA escreva valores, preços por item, subtotais ou total no resumo. O SISTEMA calcula e adiciona os valores e o TOTAL automaticamente ao final da sua mensagem de resumo.
-- No resumo, liste apenas os itens (quantidade, tamanho, sabores, borda), observações, endereço e pagamento — SEM cifras.
-- Se o cliente perguntar quanto custa um item específico, você pode consultar a TABELA DE PREÇOS acima para responder pontualmente.
+def extrair_estado(historico, config):
+    """Chamada dedicada: lê a conversa e devolve o JSON do estado do pedido.
+    Não depende de o modelo de chat ter emitido qualquer bloco."""
 
-Leia o histórico da conversa antes de responder. Mantenha contexto, não repita perguntas já respondidas e siga avançando o pedido até apresentar o resumo final para confirmação.
+    conversa = "\n".join(
+        f"{'Cliente' if m['role'] == 'user' else 'Atendente'}: {m['content']}"
+        for m in historico
+    )
 
-REGRA DE OURO DA CONFIRMAÇÃO:
-- NUNCA finalize o pedido direto. Quando tiver TODOS os dados obrigatórios, apresente o RESUMO COMPLETO do pedido (todos os itens, endereço e pagamento, SEM valores) e pergunte *Confirma o pedido acima?*.
-- Aguarde o cliente responder SIM de forma explícita. Só então o pedido é finalizado.
-- Se o cliente pedir mudança, ajuste e mostre o resumo de novo antes de confirmar.
+    messages = [
+        {"role": "system", "content": montar_extraction_prompt(config)},
+        {
+            "role": "user",
+            "content": f"CONVERSA:\n{conversa}\n\nDevolva APENAS o JSON do estado atual."
+        },
+    ]
 
-SAÍDA ESTRUTURADA (OBRIGATÓRIA):
-Ao FINAL de toda resposta, anexe um bloco técnico com os dados coletados até agora, EXATAMENTE neste formato (entre as marcas <<<DADOS>>>):
-
-<<<DADOS>>>
-{{"cliente": {{"nome": "", "endereco": ""}}, "pedido": {{"itens": [{{"quantidade": 1, "tamanho": "", "sabores": [], "meio_a_meio": false, "borda": ""}}], "bebidas": [], "observacoes": [], "endereco_entrega": "", "pagamento": ""}}, "status": "em_andamento"}}
-<<<DADOS>>>
-
-Regras do bloco e do campo "status":
-- Preencha SOMENTE o que o cliente já informou; deixe o resto como string vazia ou lista vazia.
-- "itens": lista COMPLETA de pizzas do pedido — uma entrada por pizza. Se o cliente pede 2 pizzas diferentes, são 2 objetos na lista. SEMPRE repita TODAS as pizzas já pedidas em todo bloco (nunca omita uma pizza já escolhida).
-- Cada item tem seu próprio "tamanho", "sabores", "meio_a_meio" e "borda". Use "quantidade" só para repetir a MESMA pizza idêntica.
-- "bebidas", "observacoes", "endereco_entrega" e "pagamento" valem para o pedido inteiro (nível externo), não por item.
-- "endereco_entrega": endereço de ENTREGA DESTE pedido. Por padrão é o endereço do cadastro (campo CLIENTE acima); se o cliente pedir para entregar em outro lugar SÓ desta vez, coloque o novo endereço aqui SEM alterar o cadastro ("cliente"."endereco").
-- "cliente"."endereco" só deve ser preenchido no cadastro de cliente NOVO; para cliente já cadastrado, não altere.
-- "observacoes": lista de pedidos especiais do cliente (ex: ["sem cebola", "com ketchup"]); vazia se não houver.
-- "status": "em_andamento" → ainda coletando dados ou faltam itens obrigatórios.
-- "status": "aguardando_confirmacao" → você acabou de apresentar o RESUMO COMPLETO e está esperando o cliente confirmar. Use SEMPRE este status na mensagem em que mostra o resumo.
-- "status": "confirmado" → APENAS na mensagem seguinte, depois que o cliente respondeu SIM explicitamente ao resumo. NUNCA pule direto para "confirmado" sem ter passado por "aguardando_confirmacao".
-- Esse bloco é técnico, será removido antes de chegar ao cliente. NUNCA o mencione nem o comente na conversa."""
+    return _parse_json_estado(chat(messages))
 
 
 def processar_mensagem(telefone, mensagem, push_name=""):
@@ -677,10 +692,27 @@ def processar_mensagem(telefone, mensagem, push_name=""):
             + historico[-HISTORICO_JANELA:]
         )
 
-        resposta_bruta = chat(messages).strip()
+        print("\n===== SYSTEM PROMPT =====")
+        print(messages[0]["content"])
+        print("=========================\n")
 
-        # Separa o texto visível do bloco técnico e persiste o que foi coletado
-        texto, dados = extrair_dados_estruturados(resposta_bruta)
+        resposta_bruta = chat(messages).strip()
+        print("\n===== RESPOSTA BRUTA =====")
+        print(resposta_bruta)
+        print("=========================\n")
+
+        # Limpa qualquer bloco técnico que o chat tenha emitido por engano
+        texto, _ = extrair_dados_estruturados(resposta_bruta)
+
+        # Estado do pedido vem de uma chamada DEDICADA (não depende do chat).
+        historico_para_extracao = historico + [
+            {"role": "assistant", "content": texto}
+        ]
+        dados = extrair_estado(
+            historico_para_extracao[-HISTORICO_JANELA:],
+            pizzaria
+        )
+        print("DADOS EXTRAIDOS =", dados)
 
         if dados:
             aplicar_dados(memory, dados)
@@ -691,8 +723,8 @@ def processar_mensagem(telefone, mensagem, push_name=""):
                 pizzaria.get("precos", {})
             )
 
-            # No resumo, o CÓDIGO anexa os valores/total (a IA não escreve
-            # preços) — assim o que o cliente vê é sempre o que será gravado.
+            # No resumo, o CÓDIGO anexa o preço de cada pizza e o total
+            # (a IA não escreve preços) — o que o cliente vê = o que é gravado.
             if dados.get("status") == "aguardando_confirmacao":
                 valores = calcular_total(
                     memory["pedido_atual"],

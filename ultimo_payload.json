@@ -1,0 +1,41 @@
+{
+  "event": "messages.upsert",
+  "instance": "pizzaria2",
+  "data": {
+    "key": {
+      "remoteJid": "188102505140309@lid",
+      "fromMe": false,
+      "id": "AC394034A5B7FCDC85CFEC364E70E8C8"
+    },
+    "pushName": "Márcia",
+    "status": "DELIVERY_ACK",
+    "message": {
+      "messageContextInfo": {
+        "deviceListMetadata": {
+          "recipientKeyHash": "4BBIkFK4og57Iw==",
+          "recipientTimestamp": "1781012879"
+        },
+        "deviceListMetadataVersion": 2,
+        "messageSecret": "usFKXRJaiIu6VydpFRNUeoMfUDnEumucrpk8X4JWxZw="
+      },
+      "conversation": "Oi"
+    },
+    "contextInfo": {
+      "expiration": 604800,
+      "ephemeralSettingTimestamp": "1668008265",
+      "disappearingMode": {
+        "initiator": "CHANGED_IN_CHAT",
+        "trigger": "UNKNOWN"
+      }
+    },
+    "messageType": "conversation",
+    "messageTimestamp": 1781035781,
+    "instanceId": "182d404c-ee0b-427b-a062-f89efa2af3da",
+    "source": "android"
+  },
+  "destination": "http://192.168.1.64:5000/webhook/messages-upsert",
+  "date_time": "2026-06-09T17:09:39.246Z",
+  "sender": "5521988138401@s.whatsapp.net",
+  "server_url": "http://localhost:8080",
+  "apikey": "34A88695-0670-40D3-8EB5-BAEAAF4AF2C4"
+}

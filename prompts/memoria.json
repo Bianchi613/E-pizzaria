@@ -1,0 +1,20 @@
+{
+  "cliente": {
+    "nome": "",
+    "telefone": "",
+    "endereco": ""
+  },
+
+  "pedido_atual": {
+    "quantidade": 1,
+    "tamanho": "",
+    "sabores": [],
+    "meio_a_meio": false,
+    "borda": "",
+    "bebidas": [],
+    "pagamento": ""
+  },
+
+  "historico_pedidos": [],
+  "historico_conversa": []
+}

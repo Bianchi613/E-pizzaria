@@ -79,13 +79,10 @@ def _memoria_padrao():
             "endereco": ""
         },
         "pedido_atual": {
-            "quantidade": 1,
-            "tamanho": "",
-            "sabores": [],
-            "meio_a_meio": False,
-            "borda": "",
+            "itens": [],
             "bebidas": [],
             "observacoes": [],
+            "endereco_entrega": "",
             "pagamento": ""
         },
         "historico_pedidos": [],
@@ -321,18 +318,31 @@ def extrair_dados_estruturados(resposta):
     return texto, dados
 
 
+def _significativo(valor):
+    """True se o valor deve sobrescrever o que já existe. Booleanos e números
+    sempre valem; strings/listas só quando não estão vazios. Isso evita que a
+    IA apague o carrinho ao mandar campos vazios na mensagem de confirmação."""
+
+    if isinstance(valor, bool):
+        return True
+    if isinstance(valor, (int, float)):
+        return True
+    return bool(valor)
+
+
 def aplicar_dados(memory, dados):
-    """Atualiza cliente/pedido_atual na memória com o que a IA coletou."""
+    """Atualiza cliente/pedido_atual na memória com o que a IA coletou,
+    sem sobrescrever dados já preenchidos por valores vazios."""
 
     cliente = dados.get("cliente") or {}
     for campo in ("nome", "endereco"):
-        valor = cliente.get(campo)
-        if valor:
-            memory["cliente"][campo] = valor
+        if _significativo(cliente.get(campo)):
+            memory["cliente"][campo] = cliente[campo]
 
     pedido = dados.get("pedido") or {}
-    if pedido:
-        memory["pedido_atual"].update(pedido)
+    for campo, valor in pedido.items():
+        if _significativo(valor):
+            memory["pedido_atual"][campo] = valor
 
 
 def _eh_borda_paga(borda):
@@ -345,51 +355,81 @@ def _eh_borda_paga(borda):
 
 def calcular_total(pedido, precos):
     """Calcula os valores do pedido de forma determinística (o LLM não faz
-    a conta). Retorna um detalhamento com subtotais e total."""
+    a conta). Soma todos os itens (pizzas), bebidas e taxa de entrega."""
 
     precos_tam = precos.get("tamanhos", {})
     precos_beb = precos.get("bebidas", {})
     preco_borda = precos.get("borda", 0)
     taxa = precos.get("taxa_entrega", 0)
 
-    qtd = pedido.get("quantidade") or 1
-    tamanho = (pedido.get("tamanho") or "").strip().lower()
+    itens_valores = []
+    valor_pizzas = 0
 
-    valor_pizza = precos_tam.get(tamanho, 0) * qtd
+    for item in pedido.get("itens", []):
+        qtd = item.get("quantidade") or 1
+        tamanho = (item.get("tamanho") or "").strip().lower()
 
-    valor_borda = (
-        preco_borda * qtd
-        if _eh_borda_paga(pedido.get("borda"))
-        else 0
-    )
+        v_pizza = precos_tam.get(tamanho, 0) * qtd
+        v_borda = preco_borda * qtd if _eh_borda_paga(item.get("borda")) else 0
+        subtotal_item = v_pizza + v_borda
+
+        valor_pizzas += subtotal_item
+        itens_valores.append({
+            "tamanho": item.get("tamanho", ""),
+            "quantidade": qtd,
+            "valor_pizza": v_pizza,
+            "valor_borda": v_borda,
+            "subtotal": subtotal_item,
+        })
 
     valor_bebidas = sum(
         precos_beb.get(str(b).strip().lower(), 0)
         for b in pedido.get("bebidas", [])
     )
 
-    subtotal = valor_pizza + valor_borda + valor_bebidas
+    subtotal = valor_pizzas + valor_bebidas
     taxa_entrega = taxa if subtotal > 0 else 0
     total = subtotal + taxa_entrega
 
     return {
-        "valor_pizza": valor_pizza,
-        "valor_borda": valor_borda,
+        "itens": itens_valores,
+        "valor_pizzas": valor_pizzas,
         "valor_bebidas": valor_bebidas,
         "taxa_entrega": taxa_entrega,
         "total": total,
     }
 
 
-def pedido_completo(pedido):
-    """Garante que o pedido tem o mínimo obrigatório antes de finalizar,
-    evitando gravar um pedido vazio mesmo que a IA mande status=confirmado."""
+def formatar_resumo_valores(valores):
+    """Bloco de valores que o CÓDIGO anexa ao resumo (a IA não escreve preços),
+    garantindo que o total exibido seja sempre igual ao gravado no banco."""
 
-    return bool(
-        pedido.get("tamanho")
-        and pedido.get("sabores")
-        and pedido.get("pagamento")
+    linhas = [f"🍕 Pizzas: R$ {valores['valor_pizzas']}"]
+
+    if valores["valor_bebidas"]:
+        linhas.append(f"🥤 Bebidas: R$ {valores['valor_bebidas']}")
+
+    linhas.append(f"🚚 Taxa de entrega: R$ {valores['taxa_entrega']}")
+    linhas.append(f"💰 *TOTAL: R$ {valores['total']}*")
+
+    return "—————————————\n" + "\n".join(linhas)
+
+
+def pedido_completo(pedido):
+    """Garante que o pedido tem o mínimo obrigatório antes de finalizar:
+    pelo menos uma pizza (com tamanho e sabores) e forma de pagamento."""
+
+    itens = pedido.get("itens", [])
+
+    if not itens:
+        return False
+
+    todos_validos = all(
+        item.get("tamanho") and item.get("sabores")
+        for item in itens
     )
+
+    return bool(todos_validos and pedido.get("pagamento"))
 
 
 def persistir(memory, status, conn, precos=None):
@@ -425,6 +465,11 @@ def persistir(memory, status, conn, precos=None):
         and cliente.get("id")
         and pedido_completo(memory["pedido_atual"])
     ):
+        # Garante o endereço de entrega no pedido (snapshot); se a IA não
+        # preencheu endereco_entrega, usa o endereço do cadastro.
+        if not memory["pedido_atual"].get("endereco_entrega"):
+            memory["pedido_atual"]["endereco_entrega"] = cliente.get("endereco", "")
+
         # Anexa os valores calculados ao pedido antes de gravar
         memory["pedido_atual"]["valores"] = calcular_total(
             memory["pedido_atual"],
@@ -474,7 +519,6 @@ def montar_system_prompt(pizzaria, memory):
     cadastrado = memory.get("cliente_cadastrado", False)
     ultimos = memory.get("ultimos_pedidos", [])
     precos = pizzaria.get("precos", {})
-    valores = calcular_total(memory.get("pedido_atual", {}), precos)
 
     def tabela_precos():
         tam = precos.get("tamanhos", {})
@@ -515,6 +559,10 @@ Bebidas: {', '.join(pizzaria.get('bebidas', []))}
 TABELA DE PREÇOS (em reais):
 {tabela_precos()}
 Observação: meio a meio NÃO altera o preço (vale o valor do tamanho escolhido).
+Se o cliente pedir para ver os preços ou o cardápio, apresente esta lista de itens com os valores.
+
+FORMAS DE PAGAMENTO (sempre liste estas opções ao perguntar como o cliente vai pagar):
+{', '.join(pizzaria.get('formas_pagamento', []))}
 
 DADOS OBRIGATÓRIOS PARA FECHAR O PEDIDO:
 {', '.join(pizzaria.get('dados_obrigatorios', []))}
@@ -534,6 +582,12 @@ PROCEDIMENTO DE CADASTRO (cliente novo):
 PROCEDIMENTO DE OBSERVAÇÕES:
 {linhas(pizzaria.get('procedimento_observacoes', []))}
 
+PROCEDIMENTO DE ENDEREÇO (confirme SEMPRE antes do resumo):
+{linhas(pizzaria.get('procedimento_endereco', []))}
+
+PROCEDIMENTO DE PAGAMENTO:
+{linhas(pizzaria.get('procedimento_pagamento', []))}
+
 PROCEDIMENTO DE CONFIRMAÇÃO (obrigatório antes de finalizar):
 {linhas(pizzaria.get('procedimento_confirmacao', []))}
 
@@ -543,13 +597,15 @@ MODELO DE RESUMO (use este formato ao apresentar o pedido completo):
 PEDIDO ATUAL (já coletado até agora — NÃO pergunte novamente o que já está preenchido):
 {json.dumps(memory.get('pedido_atual', {}), ensure_ascii=False)}
 
-VALORES CALCULADOS PELO SISTEMA (use EXATAMENTE estes valores no resumo, NÃO recalcule):
-Pizza: R$ {valores['valor_pizza']} | Borda: R$ {valores['valor_borda']} | Bebidas: R$ {valores['valor_bebidas']} | Taxa de entrega: R$ {valores['taxa_entrega']} | TOTAL: R$ {valores['total']}
+REGRA DE PREÇOS (MUITO IMPORTANTE):
+- NUNCA escreva valores, preços por item, subtotais ou total no resumo. O SISTEMA calcula e adiciona os valores e o TOTAL automaticamente ao final da sua mensagem de resumo.
+- No resumo, liste apenas os itens (quantidade, tamanho, sabores, borda), observações, endereço e pagamento — SEM cifras.
+- Se o cliente perguntar quanto custa um item específico, você pode consultar a TABELA DE PREÇOS acima para responder pontualmente.
 
 Leia o histórico da conversa antes de responder. Mantenha contexto, não repita perguntas já respondidas e siga avançando o pedido até apresentar o resumo final para confirmação.
 
 REGRA DE OURO DA CONFIRMAÇÃO:
-- NUNCA finalize o pedido direto. Quando tiver TODOS os dados obrigatórios, apresente o RESUMO COMPLETO do pedido (todos os itens, endereço e pagamento) e pergunte *Confirma o pedido acima?*.
+- NUNCA finalize o pedido direto. Quando tiver TODOS os dados obrigatórios, apresente o RESUMO COMPLETO do pedido (todos os itens, endereço e pagamento, SEM valores) e pergunte *Confirma o pedido acima?*.
 - Aguarde o cliente responder SIM de forma explícita. Só então o pedido é finalizado.
 - Se o cliente pedir mudança, ajuste e mostre o resumo de novo antes de confirmar.
 
@@ -557,11 +613,16 @@ SAÍDA ESTRUTURADA (OBRIGATÓRIA):
 Ao FINAL de toda resposta, anexe um bloco técnico com os dados coletados até agora, EXATAMENTE neste formato (entre as marcas <<<DADOS>>>):
 
 <<<DADOS>>>
-{{"cliente": {{"nome": "", "endereco": ""}}, "pedido": {{"quantidade": 1, "tamanho": "", "sabores": [], "meio_a_meio": false, "borda": "", "bebidas": [], "observacoes": [], "pagamento": ""}}, "status": "em_andamento"}}
+{{"cliente": {{"nome": "", "endereco": ""}}, "pedido": {{"itens": [{{"quantidade": 1, "tamanho": "", "sabores": [], "meio_a_meio": false, "borda": ""}}], "bebidas": [], "observacoes": [], "endereco_entrega": "", "pagamento": ""}}, "status": "em_andamento"}}
 <<<DADOS>>>
 
 Regras do bloco e do campo "status":
 - Preencha SOMENTE o que o cliente já informou; deixe o resto como string vazia ou lista vazia.
+- "itens": lista COMPLETA de pizzas do pedido — uma entrada por pizza. Se o cliente pede 2 pizzas diferentes, são 2 objetos na lista. SEMPRE repita TODAS as pizzas já pedidas em todo bloco (nunca omita uma pizza já escolhida).
+- Cada item tem seu próprio "tamanho", "sabores", "meio_a_meio" e "borda". Use "quantidade" só para repetir a MESMA pizza idêntica.
+- "bebidas", "observacoes", "endereco_entrega" e "pagamento" valem para o pedido inteiro (nível externo), não por item.
+- "endereco_entrega": endereço de ENTREGA DESTE pedido. Por padrão é o endereço do cadastro (campo CLIENTE acima); se o cliente pedir para entregar em outro lugar SÓ desta vez, coloque o novo endereço aqui SEM alterar o cadastro ("cliente"."endereco").
+- "cliente"."endereco" só deve ser preenchido no cadastro de cliente NOVO; para cliente já cadastrado, não altere.
 - "observacoes": lista de pedidos especiais do cliente (ex: ["sem cebola", "com ketchup"]); vazia se não houver.
 - "status": "em_andamento" → ainda coletando dados ou faltam itens obrigatórios.
 - "status": "aguardando_confirmacao" → você acabou de apresentar o RESUMO COMPLETO e está esperando o cliente confirmar. Use SEMPRE este status na mensagem em que mostra o resumo.
@@ -580,6 +641,10 @@ def processar_mensagem(telefone, mensagem, push_name=""):
 
     memory.setdefault("cliente", {})
     memory["cliente"]["telefone"] = telefone
+
+    # Migra carrinhos no formato antigo (1 pizza) para o novo (lista de itens)
+    if "itens" not in memory.get("pedido_atual", {}):
+        memory["pedido_atual"] = _memoria_padrao()["pedido_atual"]
 
     # Mantém a conexão aberta por toda a interação: reconhecer (ler) no
     # início e persistir (gravar) no fim usam a mesma conexão.
@@ -625,6 +690,15 @@ def processar_mensagem(telefone, mensagem, push_name=""):
                 conn,
                 pizzaria.get("precos", {})
             )
+
+            # No resumo, o CÓDIGO anexa os valores/total (a IA não escreve
+            # preços) — assim o que o cliente vê é sempre o que será gravado.
+            if dados.get("status") == "aguardando_confirmacao":
+                valores = calcular_total(
+                    memory["pedido_atual"],
+                    pizzaria.get("precos", {})
+                )
+                texto = f"{texto}\n\n{formatar_resumo_valores(valores)}"
 
         historico.append({"role": "assistant", "content": texto})
         memory["historico_conversa"] = historico[-HISTORICO_MAX:]

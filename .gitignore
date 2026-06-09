@@ -1,1 +1,11 @@
 .env
+
+# Python
+__pycache__/
+*.pyc
+
+# Estado de runtime (memória por telefone)
+prompts/memorias/
+
+# Logs
+logs/

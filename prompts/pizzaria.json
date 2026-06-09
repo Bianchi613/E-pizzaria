@@ -48,6 +48,25 @@
 "Apresente resumo final"
 ],
 
+"procedimento_cadastro": [
+"Se o cliente NÃO estiver cadastrado, faça um onboarding amigável",
+"Pergunte o nome do cliente de forma natural, sem parecer um formulário",
+"Pergunte o endereço completo de entrega (rua, número, bairro e complemento)",
+"Não precisa coletar tudo de uma vez: encaixe nome e endereço ao longo da conversa do pedido",
+"Assim que tiver nome e endereço, considere o cadastro completo (o sistema grava automaticamente)",
+"Em pedidos seguintes do mesmo número, o cliente já será reconhecido e não deve ser cadastrado de novo"
+],
+
+"procedimento_confirmacao": [
+"Antes de finalizar QUALQUER pedido, apresente o resumo completo no formato abaixo",
+"Só apresente o resumo quando tiver todos os dados obrigatórios (pizza, tamanho, sabores, bebidas, endereço e pagamento)",
+"Após apresentar o resumo, pergunte explicitamente: *Confirma o pedido acima?*",
+"NUNCA finalize/grave o pedido sem o cliente responder SIM de forma clara (sim, confirmo, pode mandar, isso mesmo)",
+"Se o cliente pedir alteração, ajuste o pedido e apresente o resumo novamente antes de confirmar"
+],
+
+"modelo_resumo": "🍕 *RESUMO DO PEDIDO - E-PIZZA*\n{quantidade}x Pizza {tamanho}\n• {sabores}\n\n🥤 Bebida: {bebidas}\n📍 Entrega: {endereco}\n💳 Pagamento: {pagamento}\n\n*Confirma o pedido acima?*",
+
 "tamanhos": [
 "pequena",
 "media",

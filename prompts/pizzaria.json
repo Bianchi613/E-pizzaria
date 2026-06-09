@@ -41,11 +41,20 @@
 "Pergunte o pedido",
 "Descubra sabores e tamanho",
 "Verifique se é meio a meio",
+"Pergunte se deseja borda recheada",
+"Pergunte se tem alguma observação (ex: sem cebola, com ketchup, bem assada)",
 "Ofereça bebidas",
-"Confirme o pedido",
 "Solicite endereço",
 "Solicite pagamento",
-"Apresente resumo final"
+"Apresente o resumo final com os valores e o total",
+"Confirme o pedido"
+],
+
+"procedimento_observacoes": [
+"Sempre pergunte se o cliente tem alguma observação ou pedido especial",
+"Exemplos de observações: sem cebola, sem azeitona, com ketchup, com bastante queijo, bem assada, pouco molho",
+"Observações são opcionais e NÃO têm custo adicional",
+"Registre cada observação como item no campo observacoes do pedido"
 ],
 
 "procedimento_cadastro": [
@@ -65,7 +74,26 @@
 "Se o cliente pedir alteração, ajuste o pedido e apresente o resumo novamente antes de confirmar"
 ],
 
-"modelo_resumo": "🍕 *RESUMO DO PEDIDO - E-PIZZA*\n{quantidade}x Pizza {tamanho}\n• {sabores}\n\n🥤 Bebida: {bebidas}\n📍 Entrega: {endereco}\n💳 Pagamento: {pagamento}\n\n*Confirma o pedido acima?*",
+"modelo_resumo": "🍕 *RESUMO DO PEDIDO - E-PIZZA*\n{quantidade}x Pizza {tamanho} — R$ {valor_pizza}\n• {sabores}\nBorda: {borda} {valor_borda}\n📝 Observações: {observacoes}\n\n🥤 Bebidas: {bebidas} — R$ {valor_bebidas}\n📍 Entrega: {endereco}\n🚚 Taxa de entrega: R$ {taxa_entrega}\n💳 Pagamento: {pagamento}\n\n*TOTAL: R$ {total}*\n\n*Confirma o pedido acima?*",
+
+"precos": {
+"tamanhos": {
+"pequena": 60,
+"media": 80,
+"grande": 100,
+"familia": 120
+},
+"bebidas": {
+"coca lata": 6,
+"coca 2l": 10,
+"guarana lata": 6,
+"guarana 2l": 10,
+"fanta lata": 6,
+"agua": 4
+},
+"borda": 15,
+"taxa_entrega": 10
+},
 
 "tamanhos": [
 "pequena",

@@ -85,6 +85,7 @@ def _memoria_padrao():
             "meio_a_meio": False,
             "borda": "",
             "bebidas": [],
+            "observacoes": [],
             "pagamento": ""
         },
         "historico_pedidos": [],
@@ -334,6 +335,52 @@ def aplicar_dados(memory, dados):
         memory["pedido_atual"].update(pedido)
 
 
+def _eh_borda_paga(borda):
+    """Borda só é cobrada quando é recheada (não tradicional/normal/vazia)."""
+
+    valor = (borda or "").strip().lower()
+
+    return valor not in ("", "tradicional", "normal", "sem", "sem borda", "nao")
+
+
+def calcular_total(pedido, precos):
+    """Calcula os valores do pedido de forma determinística (o LLM não faz
+    a conta). Retorna um detalhamento com subtotais e total."""
+
+    precos_tam = precos.get("tamanhos", {})
+    precos_beb = precos.get("bebidas", {})
+    preco_borda = precos.get("borda", 0)
+    taxa = precos.get("taxa_entrega", 0)
+
+    qtd = pedido.get("quantidade") or 1
+    tamanho = (pedido.get("tamanho") or "").strip().lower()
+
+    valor_pizza = precos_tam.get(tamanho, 0) * qtd
+
+    valor_borda = (
+        preco_borda * qtd
+        if _eh_borda_paga(pedido.get("borda"))
+        else 0
+    )
+
+    valor_bebidas = sum(
+        precos_beb.get(str(b).strip().lower(), 0)
+        for b in pedido.get("bebidas", [])
+    )
+
+    subtotal = valor_pizza + valor_borda + valor_bebidas
+    taxa_entrega = taxa if subtotal > 0 else 0
+    total = subtotal + taxa_entrega
+
+    return {
+        "valor_pizza": valor_pizza,
+        "valor_borda": valor_borda,
+        "valor_bebidas": valor_bebidas,
+        "taxa_entrega": taxa_entrega,
+        "total": total,
+    }
+
+
 def pedido_completo(pedido):
     """Garante que o pedido tem o mínimo obrigatório antes de finalizar,
     evitando gravar um pedido vazio mesmo que a IA mande status=confirmado."""
@@ -345,13 +392,14 @@ def pedido_completo(pedido):
     )
 
 
-def persistir(memory, status, conn):
+def persistir(memory, status, conn, precos=None):
     """Cadastra o cliente novo (se ainda não existe) e salva o pedido
     quando o cliente confirma. Retorna True se algo foi gravado."""
 
     if conn is None:
         return False
 
+    precos = precos or {}
     cliente = memory["cliente"]
     gravou = False
 
@@ -377,6 +425,12 @@ def persistir(memory, status, conn):
         and cliente.get("id")
         and pedido_completo(memory["pedido_atual"])
     ):
+        # Anexa os valores calculados ao pedido antes de gravar
+        memory["pedido_atual"]["valores"] = calcular_total(
+            memory["pedido_atual"],
+            precos
+        )
+
         pedido_id = salvar_pedido(
             cliente["id"],
             memory["pedido_atual"],
@@ -419,6 +473,20 @@ def montar_system_prompt(pizzaria, memory):
 
     cadastrado = memory.get("cliente_cadastrado", False)
     ultimos = memory.get("ultimos_pedidos", [])
+    precos = pizzaria.get("precos", {})
+    valores = calcular_total(memory.get("pedido_atual", {}), precos)
+
+    def tabela_precos():
+        tam = precos.get("tamanhos", {})
+        beb = precos.get("bebidas", {})
+        linhas_tam = [f"  Pizza {t}: R$ {v}" for t, v in tam.items()]
+        linhas_beb = [f"  {b}: R$ {v}" for b, v in beb.items()]
+        return (
+            "\n".join(linhas_tam)
+            + f"\n  Borda recheada: + R$ {precos.get('borda', 0)} por pizza"
+            + "\n" + "\n".join(linhas_beb)
+            + f"\n  Taxa de entrega: R$ {precos.get('taxa_entrega', 0)}"
+        )
 
     if cadastrado:
         bloco_reconhecimento = (
@@ -444,6 +512,10 @@ Tamanhos: {', '.join(pizzaria.get('tamanhos', []))}
 Sabores: {', '.join(pizzaria.get('sabores', []))}
 Bebidas: {', '.join(pizzaria.get('bebidas', []))}
 
+TABELA DE PREÇOS (em reais):
+{tabela_precos()}
+Observação: meio a meio NÃO altera o preço (vale o valor do tamanho escolhido).
+
 DADOS OBRIGATÓRIOS PARA FECHAR O PEDIDO:
 {', '.join(pizzaria.get('dados_obrigatorios', []))}
 
@@ -459,6 +531,9 @@ CLIENTE (dados vindos do cadastro pelo número de telefone):
 PROCEDIMENTO DE CADASTRO (cliente novo):
 {linhas(pizzaria.get('procedimento_cadastro', []))}
 
+PROCEDIMENTO DE OBSERVAÇÕES:
+{linhas(pizzaria.get('procedimento_observacoes', []))}
+
 PROCEDIMENTO DE CONFIRMAÇÃO (obrigatório antes de finalizar):
 {linhas(pizzaria.get('procedimento_confirmacao', []))}
 
@@ -467,6 +542,9 @@ MODELO DE RESUMO (use este formato ao apresentar o pedido completo):
 
 PEDIDO ATUAL (já coletado até agora — NÃO pergunte novamente o que já está preenchido):
 {json.dumps(memory.get('pedido_atual', {}), ensure_ascii=False)}
+
+VALORES CALCULADOS PELO SISTEMA (use EXATAMENTE estes valores no resumo, NÃO recalcule):
+Pizza: R$ {valores['valor_pizza']} | Borda: R$ {valores['valor_borda']} | Bebidas: R$ {valores['valor_bebidas']} | Taxa de entrega: R$ {valores['taxa_entrega']} | TOTAL: R$ {valores['total']}
 
 Leia o histórico da conversa antes de responder. Mantenha contexto, não repita perguntas já respondidas e siga avançando o pedido até apresentar o resumo final para confirmação.
 
@@ -479,11 +557,12 @@ SAÍDA ESTRUTURADA (OBRIGATÓRIA):
 Ao FINAL de toda resposta, anexe um bloco técnico com os dados coletados até agora, EXATAMENTE neste formato (entre as marcas <<<DADOS>>>):
 
 <<<DADOS>>>
-{{"cliente": {{"nome": "", "endereco": ""}}, "pedido": {{"quantidade": 1, "tamanho": "", "sabores": [], "meio_a_meio": false, "borda": "", "bebidas": [], "pagamento": ""}}, "status": "em_andamento"}}
+{{"cliente": {{"nome": "", "endereco": ""}}, "pedido": {{"quantidade": 1, "tamanho": "", "sabores": [], "meio_a_meio": false, "borda": "", "bebidas": [], "observacoes": [], "pagamento": ""}}, "status": "em_andamento"}}
 <<<DADOS>>>
 
 Regras do bloco e do campo "status":
 - Preencha SOMENTE o que o cliente já informou; deixe o resto como string vazia ou lista vazia.
+- "observacoes": lista de pedidos especiais do cliente (ex: ["sem cebola", "com ketchup"]); vazia se não houver.
 - "status": "em_andamento" → ainda coletando dados ou faltam itens obrigatórios.
 - "status": "aguardando_confirmacao" → você acabou de apresentar o RESUMO COMPLETO e está esperando o cliente confirmar. Use SEMPRE este status na mensagem em que mostra o resumo.
 - "status": "confirmado" → APENAS na mensagem seguinte, depois que o cliente respondeu SIM explicitamente ao resumo. NUNCA pule direto para "confirmado" sem ter passado por "aguardando_confirmacao".
@@ -540,7 +619,12 @@ def processar_mensagem(telefone, mensagem, push_name=""):
 
         if dados:
             aplicar_dados(memory, dados)
-            persistir(memory, dados.get("status", ""), conn)
+            persistir(
+                memory,
+                dados.get("status", ""),
+                conn,
+                pizzaria.get("precos", {})
+            )
 
         historico.append({"role": "assistant", "content": texto})
         memory["historico_conversa"] = historico[-HISTORICO_MAX:]

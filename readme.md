@@ -68,6 +68,7 @@ O **E-Pizza** automatiza o fluxo de atendimento de uma pizzaria através do What
 | Cliente não reconhecido | Webhook nunca consultava o banco; telefone com formatação variável | Reconhecimento por número normalizado direto no Postgres |
 | Cliente novo não era cadastrado | Nenhum código extraía nome/endereço da conversa | Saída estruturada `<<<DADOS>>>` + cadastro automático |
 | Pedido finalizado sem confirmar | Não havia etapa de confirmação obrigatória | Resumo completo + status `aguardando_confirmacao` → `confirmado` + trava de pedido completo |
+| Memória/cliente fragmentado em 2 registros (`@lid` vs telefone real) | `extrair_numero()` (identidade) e `telefone_resposta()` (envio) podiam retornar números diferentes quando o WhatsApp entregava `remoteJid` como `@lid` | Unificadas em `extrair_telefone()` (`evolution.py`): identidade e destino do envio sempre vêm do mesmo valor; fallback `@lid` mantido como rede de segurança |
 
 ---
 

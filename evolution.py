@@ -3,6 +3,7 @@ from threading import Lock
 import json
 import os
 import re
+import traceback
 
 from flask import Flask, request
 import requests
@@ -264,7 +265,7 @@ def webhook():
     except Exception as erro:
 
         print("\nERRO:")
-        print(erro)
+        traceback.print_exc()
 
         return {"erro": str(erro)}
 

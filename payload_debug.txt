@@ -3,38 +3,99 @@
   "instance": "pizzaria2",
   "data": {
     "key": {
-      "remoteJid": "188102505140309@lid",
+      "remoteJid": "5521989531931@s.whatsapp.net",
+      "remoteJidAlt": "5521989531931@s.whatsapp.net",
       "fromMe": false,
-      "id": "AC7E4C7F0B6EB49C40E011829F02AACF"
+      "id": "ACCCC81CB36ECC145371260AEFD1BED5",
+      "participant": "",
+      "addressingMode": "lid"
     },
     "pushName": "Márcia",
     "status": "DELIVERY_ACK",
     "message": {
       "messageContextInfo": {
+        "threadId": [],
         "deviceListMetadata": {
-          "recipientKeyHash": "6N0oJqmtjxISog==",
-          "recipientTimestamp": "1781060125"
+          "senderKeyIndexes": [],
+          "recipientKeyIndexes": [],
+          "recipientKeyHash": {
+            "0": 244,
+            "1": 127,
+            "2": 252,
+            "3": 84,
+            "4": 204,
+            "5": 2,
+            "6": 69,
+            "7": 4,
+            "8": 162,
+            "9": 97
+          },
+          "recipientTimestamp": {
+            "low": 1781123617,
+            "high": 0,
+            "unsigned": true
+          }
         },
         "deviceListMetadataVersion": 2,
-        "messageSecret": "3iZkVMr3s4CMlkXOUeZyxhZIWNbm/mwKQp8M96plsGw="
+        "messageSecret": {
+          "0": 251,
+          "1": 135,
+          "2": 155,
+          "3": 54,
+          "4": 83,
+          "5": 46,
+          "6": 67,
+          "7": 21,
+          "8": 242,
+          "9": 158,
+          "10": 238,
+          "11": 206,
+          "12": 129,
+          "13": 224,
+          "14": 181,
+          "15": 206,
+          "16": 110,
+          "17": 20,
+          "18": 35,
+          "19": 180,
+          "20": 130,
+          "21": 135,
+          "22": 196,
+          "23": 129,
+          "24": 97,
+          "25": 200,
+          "26": 27,
+          "27": 178,
+          "28": 72,
+          "29": 60,
+          "30": 35,
+          "31": 161
+        }
       },
-      "conversation": "Oi"
+      "conversation": "Oieeeeee"
     },
     "contextInfo": {
+      "mentionedJid": [],
+      "groupMentions": [],
+      "statusAttributions": [],
       "expiration": 604800,
-      "ephemeralSettingTimestamp": "1668008265",
+      "ephemeralSettingTimestamp": {
+        "low": 1668008265,
+        "high": 0,
+        "unsigned": false
+      },
       "disappearingMode": {
-        "initiator": "CHANGED_IN_CHAT",
-        "trigger": "UNKNOWN"
+        "initiator": 0,
+        "trigger": 0
       }
     },
     "messageType": "conversation",
-    "messageTimestamp": 1781061664,
+    "messageTimestamp": 1781125257,
     "instanceId": "182d404c-ee0b-427b-a062-f89efa2af3da",
     "source": "android"
   },
   "destination": "http://192.168.1.64:5000/webhook/messages-upsert",
-  "date_time": "2026-06-10T00:21:04.358Z",
+  "date_time": "2026-06-10T18:00:57.034Z",
   "sender": "5521988138401@s.whatsapp.net",
   "server_url": "http://localhost:8080",
   "apikey": "34A88695-0670-40D3-8EB5-BAEAAF4AF2C4"

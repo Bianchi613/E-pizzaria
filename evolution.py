@@ -1,4 +1,3 @@
-
 from collections import deque, defaultdict
 from threading import Lock
 import json
@@ -43,6 +42,9 @@ IGNORE_FROM_ME = os.getenv("IGNORE_FROM_ME", "false").lower() == "true"
 
 # =========================================
 # DEDUPLICAÇÃO DE EVENTOS
+# O Evolution dispara o webhook várias vezes para a MESMA mensagem
+# (status READ, SERVER_ACK, etc.) com o mesmo key.id. Sem isso, a IA
+# responde 2+ vezes para cada mensagem.
 # =========================================
 
 _ids_processados = deque(maxlen=1000)
@@ -52,10 +54,12 @@ dedupe_lock = Lock()
 cliente_locks = defaultdict(Lock)
 
 def ja_processado(message_id):
+
     if not message_id:
         return False
 
     with dedupe_lock:
+
         if message_id in _ids_set:
             return True
 
@@ -68,6 +72,7 @@ def ja_processado(message_id):
         return False
 
 def limpar_numero(valor):
+
     if not valor:
         return ""
 
@@ -80,7 +85,10 @@ def limpar_numero(valor):
 
 
 def extrair_numero(data, payload, chave):
-    """A identidade do cliente é o key.remoteJid (o OUTRO lado do chat)."""
+    """A identidade do cliente é o key.remoteJid (o OUTRO lado do chat).
+    NUNCA usar 'sender': no Evolution ele é o dono da instância (o próprio
+    bot), o que faria TODOS os clientes caírem no mesmo número."""
+
     remote = chave.get("remoteJid", "") or ""
 
     print("\n===== DEBUG NUMERO =====")
@@ -99,15 +107,17 @@ TELEFONE_RE = re.compile(r"(\d{12,15})@s\.whatsapp\.net")
 
 
 def telefone_resposta(data, payload, chave):
-    """O Evolution entrega para números reais (@s.whatsapp.net). Caso o remoteJid use
-    a máscara @lid, tentamos buscar o número real no payload ou no sender do root."""
+    """O Evolution NÃO entrega para um @lid. Quando o remoteJid é @lid
+    (não-contato), tenta achar o telefone REAL (…@s.whatsapp.net) em outros
+    campos para conseguir enviar a resposta. Retorna '' se não houver."""
+
     remote = chave.get("remoteJid", "") or ""
 
-    # 1. Se o remoteJid já for um telefone real, limpamos apenas os prefixos extras
+    # 1. remoteJid já é um telefone real
     if remote.endswith("@s.whatsapp.net"):
         return limpar_numero(remote)
 
-    # 2. Varre campos onde o telefone real costuma vir quando o remoteJid vem como @lid
+    # 2. campos onde o telefone real costuma vir quando o remoteJid é @lid
     for valor in (
         payload.get("senderPn"),
         payload.get("participantPn"),
@@ -120,19 +130,17 @@ def telefone_resposta(data, payload, chave):
             if num:
                 return num
 
-    # 3. Varre todo o payload por um telefone@s.whatsapp.net
+    # 3. varre todo o payload por um telefone@s.whatsapp.net que NÃO seja o dono
+    dono = limpar_numero(data.get("sender"))
     for achado in TELEFONE_RE.findall(json.dumps(data)):
-        return achado
-
-    # 4. Fallback crítico para testes com o próprio número: busca a identidade real no remetente root
-    sender_root = data.get("sender", "")
-    if sender_root and sender_root.endswith("@s.whatsapp.net"):
-        return limpar_numero(sender_root)
+        if achado != dono:
+            return achado
 
     return ""
 
 
 def extrair_mensagem(mensagem_obj):
+
     if "conversation" in mensagem_obj:
         return mensagem_obj["conversation"]
 
@@ -148,16 +156,32 @@ def extrair_mensagem(mensagem_obj):
 
 @app.route("/webhook/messages-upsert", methods=["POST"])
 def webhook():
+
     data = request.json
+
     payload_texto = json.dumps(data, indent=2, ensure_ascii=False)
 
     with open("payload_debug.txt", "w", encoding="utf-8") as f:
         f.write(payload_texto)
 
-    with open("ultimo_payload.json", "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+    print(payload_texto)
+
+    with open(
+        "ultimo_payload.json",
+        "w",
+        encoding="utf-8"
+    ) as f:
+        json.dump(
+            data,
+            f,
+            indent=2,
+            ensure_ascii=False
+        )
+
+    print(json.dumps(data, indent=2, ensure_ascii=False))
 
     try:
+
         if data.get("event") != "messages.upsert":
             return {"status": "ignored"}
 
@@ -181,7 +205,6 @@ def webhook():
 
         if not numero:
             return {"status": "no_number"}
-            
         mensagem = extrair_mensagem(mensagem_obj)
 
         # Ignora mensagens próprias (loop) se configurado
@@ -203,6 +226,7 @@ def webhook():
         print("==============================")
 
         with cliente_locks[numero]:
+
             resposta = processar_mensagem(
                 numero,
                 mensagem,
@@ -212,24 +236,21 @@ def webhook():
         print("\nRESPOSTA:")
         print(resposta)
 
-        # Localiza o número de destino real convertido
+        # Para enviar, o Evolution precisa do telefone REAL (não entrega a @lid)
         destino = telefone_resposta(data, payload, chave)
-        print("TELEFONE RESPOSTA EXTRAÍDO =", destino)
+        print("TELEFONE RESPOSTA =", destino or "(NAO ENCONTRADO - @lid de nao-contato)")
 
-        # Garante que o target_number use sempre a terminação correta aceita pela API
-        if destino:
-            target_number = f"{destino}@s.whatsapp.net"
-        else:
-            # Fallback definitivo: limpa e força o formato no remote_jid se nada mais funcionar
-            target_number = f"{limpar_numero(remote_jid)}@s.whatsapp.net"
-
-        print(f"DISPARANDO PARA O DESTINO CORRETO: {target_number}")
+        if not destino:
+            print(
+                "AVISO: o pedido foi processado/gravado, mas nao ha telefone "
+                "real para responder (numero mascarado como @lid)."
+            )
 
         envio = requests.post(
             f"{EVOLUTION_URL}/message/sendText/{INSTANCE_NAME}",
             headers={"apikey": API_KEY},
             json={
-                "number": target_number,
+                "number": destino or remote_jid or numero,
                 "text": resposta
             }
         )
@@ -241,8 +262,10 @@ def webhook():
         return {"status": "ok"}
 
     except Exception as erro:
+
         print("\nERRO:")
         print(erro)
+
         return {"erro": str(erro)}
 
 
@@ -259,4 +282,3 @@ app.run(
     port=5000,
     threaded=True
 )
-

@@ -5,18 +5,18 @@
     "key": {
       "remoteJid": "188102505140309@lid",
       "fromMe": false,
-      "id": "AC394034A5B7FCDC85CFEC364E70E8C8"
+      "id": "AC2CDAECD3EB4FA995C1BF53975E43A5"
     },
     "pushName": "Márcia",
     "status": "DELIVERY_ACK",
     "message": {
       "messageContextInfo": {
         "deviceListMetadata": {
-          "recipientKeyHash": "4BBIkFK4og57Iw==",
-          "recipientTimestamp": "1781012879"
+          "recipientKeyHash": "6N0oJqmtjxISog==",
+          "recipientTimestamp": "1781060125"
         },
         "deviceListMetadataVersion": 2,
-        "messageSecret": "usFKXRJaiIu6VydpFRNUeoMfUDnEumucrpk8X4JWxZw="
+        "messageSecret": "I6Ntq1mE/J+LZZ1mWS/QwCva1ZXWwgnWVdcY8BrB2lU="
       },
       "conversation": "Oi"
     },
@@ -29,12 +29,12 @@
       }
     },
     "messageType": "conversation",
-    "messageTimestamp": 1781035781,
+    "messageTimestamp": 1781060302,
     "instanceId": "182d404c-ee0b-427b-a062-f89efa2af3da",
     "source": "android"
   },
   "destination": "http://192.168.1.64:5000/webhook/messages-upsert",
-  "date_time": "2026-06-09T17:09:39.246Z",
+  "date_time": "2026-06-09T23:58:22.967Z",
   "sender": "5521988138401@s.whatsapp.net",
   "server_url": "http://localhost:8080",
   "apikey": "34A88695-0670-40D3-8EB5-BAEAAF4AF2C4"

@@ -85,8 +85,21 @@ def limpar_numero(valor):
     )
 
 
-def extrair_numero(data, payload, chave):
-    """A identidade do cliente é o key.remoteJid (o OUTRO lado do chat).
+# Telefone real costuma aparecer como <dígitos>@s.whatsapp.net no payload.
+TELEFONE_RE = re.compile(r"(\d{12,15})@s\.whatsapp\.net")
+
+
+def extrair_telefone(data, payload, chave):
+    """Telefone do cliente: usado tanto como IDENTIDADE (memória/banco em
+    app.py) quanto como DESTINO do sendText. Antes essas duas coisas vinham
+    de funções separadas (extrair_numero / telefone_resposta) e podiam
+    divergir quando o remoteJid era @lid: a memória/banco gravava sob o
+    @lid, mas a resposta era enviada para o telefone real encontrado em
+    outro campo. Isso causou clientes/memórias duplicados (ex: o mesmo
+    cliente "Alan Bianchi" com um registro sob "227856655356035" e outro
+    sob "5521988138401"). Unificando aqui, os dois usos sempre recebem o
+    MESMO valor.
+
     NUNCA usar 'sender': no Evolution ele é o dono da instância (o próprio
     bot), o que faria TODOS os clientes caírem no mesmo número."""
 
@@ -100,25 +113,19 @@ def extrair_numero(data, payload, chave):
     if remote.endswith("@g.us"):   # grupos não são atendidos
         return ""
 
-    return limpar_numero(remote)
-
-
-# Telefone real costuma aparecer como <dígitos>@s.whatsapp.net no payload.
-TELEFONE_RE = re.compile(r"(\d{12,15})@s\.whatsapp\.net")
-
-
-def telefone_resposta(data, payload, chave):
-    """O Evolution NÃO entrega para um @lid. Quando o remoteJid é @lid
-    (não-contato), tenta achar o telefone REAL (…@s.whatsapp.net) em outros
-    campos para conseguir enviar a resposta. Retorna '' se não houver."""
-
-    remote = chave.get("remoteJid", "") or ""
-
-    # 1. remoteJid já é um telefone real
+    # Caso comum hoje: o Evolution já entrega o remoteJid como telefone
+    # real (<numero>@s.whatsapp.net), mesmo quando addressingMode é "lid".
+    # Confirmado em testes com teste/teste.py para dois números diferentes.
     if remote.endswith("@s.whatsapp.net"):
         return limpar_numero(remote)
 
-    # 2. campos onde o telefone real costuma vir quando o remoteJid é @lid
+    # ---- FALLBACK @lid (rede de segurança) ----
+    # Mantido para o caso do Evolution voltar a entregar remoteJid como
+    # "<id>@lid" puro (não-contato). Lógica original de telefone_resposta(),
+    # já testada em produção: tenta achar o telefone real em outros campos
+    # do payload antes de desistir.
+
+    # 1. campos onde o telefone real costuma vir quando o remoteJid é @lid
     for valor in (
         payload.get("senderPn"),
         payload.get("participantPn"),
@@ -131,13 +138,16 @@ def telefone_resposta(data, payload, chave):
             if num:
                 return num
 
-    # 3. varre todo o payload por um telefone@s.whatsapp.net que NÃO seja o dono
+    # 2. varre todo o payload por um telefone@s.whatsapp.net que NÃO seja o dono
     dono = limpar_numero(data.get("sender"))
     for achado in TELEFONE_RE.findall(json.dumps(data)):
         if achado != dono:
             return achado
 
-    return ""
+    # 3. último recurso: usa o @lid cru mesmo (mantém o comportamento
+    # antigo de extrair_numero(), que sempre retornava algo). A resposta
+    # pode não ser entregue pelo Evolution neste caso.
+    return limpar_numero(remote)
 
 
 def extrair_mensagem(mensagem_obj):
@@ -179,8 +189,6 @@ def webhook():
             ensure_ascii=False
         )
 
-    print(json.dumps(data, indent=2, ensure_ascii=False))
-
     try:
 
         if data.get("event") != "messages.upsert":
@@ -198,11 +206,17 @@ def webhook():
         print("PAYLOAD SENDER =", payload.get("sender"))
         print("REMOTE JID =", chave.get("remoteJid"))
 
-        numero = extrair_numero(data, payload, chave)
+        numero = extrair_telefone(data, payload, chave)
         remote_jid = chave.get("remoteJid", "")
 
         if "@g.us" in remote_jid:
             return {"status": "ignored_group"}
+
+        # Aviso para detectar imediatamente se o Evolution voltar a mandar
+        # @lid puro (regressão futura) - hoje remoteJid já vem como
+        # <numero>@s.whatsapp.net mesmo com addressingMode "lid".
+        if "@lid" in remote_jid:
+            print(f"AVISO: remoteJid chegou como @lid ({remote_jid}) - usando fallback")
 
         if not numero:
             return {"status": "no_number"}
@@ -237,21 +251,17 @@ def webhook():
         print("\nRESPOSTA:")
         print(resposta)
 
-        # Para enviar, o Evolution precisa do telefone REAL (não entrega a @lid)
-        destino = telefone_resposta(data, payload, chave)
-        print("TELEFONE RESPOSTA =", destino or "(NAO ENCONTRADO - @lid de nao-contato)")
-
-        if not destino:
-            print(
-                "AVISO: o pedido foi processado/gravado, mas nao ha telefone "
-                "real para responder (numero mascarado como @lid)."
-            )
+        # numero (identidade no banco/memória) e destino (para onde a
+        # resposta é enviada) são hoje o MESMO valor - extrair_telefone()
+        # garante isso. Mantidos como variáveis separadas para deixar claro
+        # o papel de cada um caso voltem a divergir no futuro.
+        destino = numero
 
         envio = requests.post(
             f"{EVOLUTION_URL}/message/sendText/{INSTANCE_NAME}",
             headers={"apikey": API_KEY},
             json={
-                "number": destino or remote_jid or numero,
+                "number": destino,
                 "text": resposta
             }
         )

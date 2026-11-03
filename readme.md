@@ -2,6 +2,8 @@
 
 > Sistema de atendimento automatizado e inteligente para pizzarias integrado ao WhatsApp via IA.
 
+> **Segurança após atualização de novembro/2026:** o webhook requer um token compartilhado configurado no servidor e enviado pelo gateway/proxy no cabeçalho `X-Webhook-Token`. Sem essa configuração, a entrada de mensagens retorna erro 503. Veja [SECURITY.md](SECURITY.md) para configuração, testes, proteção de dados e limitações.
+
 O **E-Pizza** automatiza o fluxo de atendimento de uma pizzaria através do WhatsApp. O sistema usa o **número de telefone do cliente como identificador principal** para reconhecer o cadastro no banco de dados, manter o contexto da conversa por número e conduzir o pedido — do primeiro "oi" até a confirmação e gravação no banco — usando Inteligência Artificial.
 
 ---
@@ -252,6 +254,12 @@ EVOLUTION_API_KEY=sua_apikey_evolution
 # Em produção, ignore mensagens enviadas pelo próprio número (evita loop).
 # Durante testes com o próprio WhatsApp, deixe false.
 IGNORE_FROM_ME=true
+
+# Configure um segredo forte e exclusivo em produção:
+WEBHOOK_SHARED_SECRET=
+# O Flask escuta só em loopback por padrão:
+FLASK_HOST=127.0.0.1
+FLASK_PORT=5000
 ```
 
 ---
@@ -272,4 +280,4 @@ python evolution.py
 python app.py
 ```
 
-Aponte o webhook da sua instância na Evolution API para `http://SEU_IP:5000/webhook/messages-upsert`.
+Configure a Evolution API para encaminhar eventos a `/webhook/messages-upsert` **por um gateway/proxy HTTPS autenticado**, enviando `X-Webhook-Token` com o mesmo segredo definido em `WEBHOOK_SHARED_SECRET`. O Flask escuta em `127.0.0.1:5000` por padrão: não o exponha diretamente à internet. Consulte [SECURITY.md](SECURITY.md) antes de fazer deploy.

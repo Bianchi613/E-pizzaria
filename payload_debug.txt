@@ -3,8 +3,8 @@
   "instance": "pizzaria2",
   "data": {
     "key": {
-      "remoteJid": "5521989531931@s.whatsapp.net",
-      "remoteJidAlt": "5521989531931@s.whatsapp.net",
+      "remoteJid": "X1@s.whatsapp.net",
+      "remoteJidAlt": "X1@s.whatsapp.net",
       "fromMe": false,
       "id": "AC8354082DE7AE01C1C333D8E953E336",
       "participant": "",
@@ -96,7 +96,7 @@
   },
   "destination": "http://192.168.1.64:5000/webhook/messages-upsert",
   "date_time": "2026-06-10T18:24:13.866Z",
-  "sender": "5521988138401@s.whatsapp.net",
+  "sender": "X1@s.whatsapp.net",
   "server_url": "http://localhost:8080",
   "apikey": "34A88695-0670-40D3-8EB5-BAEAAF4AF2C4"
 }

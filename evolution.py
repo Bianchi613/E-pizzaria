@@ -1,4 +1,5 @@
 from collections import deque, defaultdict
+import hmac
 from threading import Lock
 import json
 import os
@@ -39,7 +40,9 @@ API_KEY = os.getenv("EVOLUTION_API_KEY")
 # Em produção o bot NÃO deve responder mensagens enviadas por ele mesmo
 # (fromMe=True) para evitar loop. Durante testes com o próprio número,
 # defina IGNORE_FROM_ME=false no .env.
-IGNORE_FROM_ME = os.getenv("IGNORE_FROM_ME", "false").lower() == "true"
+IGNORE_FROM_ME = os.getenv("IGNORE_FROM_ME", "true").lower() == "true"
+WEBHOOK_SHARED_SECRET = os.getenv("WEBHOOK_SHARED_SECRET", "").strip()
+app.config["MAX_CONTENT_LENGTH"] = 256 * 1024
 
 # =========================================
 # DEDUPLICAÇÃO DE EVENTOS
@@ -105,10 +108,6 @@ def extrair_telefone(data, payload, chave):
 
     remote = chave.get("remoteJid", "") or ""
 
-    print("\n===== DEBUG NUMERO =====")
-    print("remoteJid (cliente) =", remote)
-    print("sender (ignorado)   =", data.get("sender"))
-    print("========================\n")
 
     if remote.endswith("@g.us"):   # grupos não são atendidos
         return ""
@@ -167,27 +166,21 @@ def extrair_mensagem(mensagem_obj):
 
 @app.route("/webhook/messages-upsert", methods=["POST"])
 def webhook():
+    # Exija que o remetente conheça um segredo configurado no Evolution
+    # ou em um proxy reverso confiável. Nunca publique o webhook sem autenticação.
+    if not WEBHOOK_SHARED_SECRET:
+        return {"error": "webhook_not_configured"}, 503
 
-    data = request.json
+    supplied = request.headers.get("X-Webhook-Token", "")
+    if not hmac.compare_digest(supplied, WEBHOOK_SHARED_SECRET):
+        return {"error": "unauthorized"}, 401
 
-    payload_texto = json.dumps(data, indent=2, ensure_ascii=False)
+    if not request.is_json:
+        return {"error": "content_type_must_be_json"}, 415
 
-    with open("payload_debug.txt", "w", encoding="utf-8") as f:
-        f.write(payload_texto)
-
-    print(payload_texto)
-
-    with open(
-        "ultimo_payload.json",
-        "w",
-        encoding="utf-8"
-    ) as f:
-        json.dump(
-            data,
-            f,
-            indent=2,
-            ensure_ascii=False
-        )
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return {"error": "invalid_json"}, 400
 
     try:
 
@@ -202,10 +195,6 @@ def webhook():
         from_me = chave.get("fromMe", False)
         push_name = payload.get("pushName", "") or ""
 
-        print("ROOT SENDER =", data.get("sender"))
-        print("PAYLOAD SENDER =", payload.get("sender"))
-        print("REMOTE JID =", chave.get("remoteJid"))
-
         numero = extrair_telefone(data, payload, chave)
         remote_jid = chave.get("remoteJid", "")
 
@@ -216,7 +205,7 @@ def webhook():
         # @lid puro (regressão futura) - hoje remoteJid já vem como
         # <numero>@s.whatsapp.net mesmo com addressingMode "lid".
         if "@lid" in remote_jid:
-            print(f"AVISO: remoteJid chegou como @lid ({remote_jid}) - usando fallback")
+            app.logger.warning("Fallback de identificação @lid utilizado")
 
         if not numero:
             return {"status": "no_number"}
@@ -234,12 +223,6 @@ def webhook():
         if ja_processado(message_id):
             return {"status": "duplicate"}
 
-        print("\n==============================")
-        print(f"NUMERO: {numero}")
-        print(f"MENSAGEM: {mensagem}")
-        print(f"FROM_ME: {from_me}  ID: {message_id}")
-        print("==============================")
-
         with cliente_locks[numero]:
 
             resposta = processar_mensagem(
@@ -247,9 +230,6 @@ def webhook():
                 mensagem,
                 push_name
             )
-
-        print("\nRESPOSTA:")
-        print(resposta)
 
         # numero (identidade no banco/memória) e destino (para onde a
         # resposta é enviada) são hoje o MESMO valor - extrair_telefone()
@@ -260,36 +240,24 @@ def webhook():
         envio = requests.post(
             f"{EVOLUTION_URL}/message/sendText/{INSTANCE_NAME}",
             headers={"apikey": API_KEY},
-            json={
-                "number": destino,
-                "text": resposta
-            }
+            json={"number": destino, "text": resposta},
+            timeout=20,
         )
-
-        print("\nSTATUS ENVIO:")
-        print(envio.status_code)
-        print(envio.text)
-
+        envio.raise_for_status()
         return {"status": "ok"}
 
-    except Exception as erro:
-
-        print("\nERRO:")
-        traceback.print_exc()
-
-        return {"erro": str(erro)}
+    except Exception:
+        app.logger.exception("Falha no processamento do webhook")
+        return {"error": "internal_error"}, 500
 
 
 # =========================================
 # START
 # =========================================
 
-print("\n===================================")
-print("E-pizzaria ONLINE")
-print("===================================\n")
-
-app.run(
-    host="0.0.0.0",
-    port=5000,
-    threaded=True
-)
+if __name__ == "__main__":
+    app.run(
+        host=os.getenv("FLASK_HOST", "127.0.0.1"),
+        port=int(os.getenv("FLASK_PORT", "5000")),
+        threaded=True,
+    )
